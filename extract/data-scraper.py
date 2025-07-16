@@ -5,14 +5,15 @@ import time
 import random
 import logging 
 from dotenv import load_dotenv
+from dotenv import find_dotenv
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
+load_dotenv()  # Load environment variables from .env file
+print(find_dotenv())  # Debugging line to check if .env is found
 # Load in URLs for scraping
 competition_ids = os.getenv("competition_ids")
 competition_url_template = os.getenv("competition_url_template")    
@@ -46,6 +47,7 @@ def get_match_ids(competition_id: int) -> list[int]:
 
 # Collect match data 
 def collect_match_data(match_id: int) -> dict | None:
+        time.sleep(random.uniform(1.5, 3.5)) 
         response = requests.get(f"{match_base_url}{match_id}", headers=headers) #send request to match URL
         if response.status_code == 200:
             logger.info(f"Match {match_id} fetched")
@@ -57,6 +59,7 @@ def collect_match_data(match_id: int) -> dict | None:
 
 # Collect event data
 def collect_event_data(match_id: int) -> dict | None:
+        time.sleep(random.uniform(1.5, 3.5)) 
         response = requests.get(f"{event_base_url}{match_id}", headers=headers) #send request to event URL
         if response.status_code == 200:
             logger.info(f"Event {match_id} fetched")
@@ -74,7 +77,6 @@ def fetch_data_parallel(fetch_func, ids: list[int], max_workers=5) -> list[dict]
             data = future.result() # get the result of the future
             if data:
                 results.append(data)    
-    time.sleep(random.uniform(1.5, 3.5)) 
     return results
         
 # Save data to JSON files
@@ -85,8 +87,8 @@ def save_data(comp_id: int, matches: list[dict], events: list[dict]) -> None:
     
 
     current_time = time.strftime("%Y%m%d_%H%M%S") # format current time for file naming
-    save_path_matches = save_dir / f"competition_{comp_id}_matches_{current_time}.json" # create a file path for matches
-    save_path_events = save_dir / f"competition_{comp_id}_events_{current_time}.json" # create a file path for events
+    save_path_matches = save_dir / f"competition_{comp_id}_dates.json" # create a file path for matches
+    save_path_events = save_dir / f"competition_{comp_id}_events.json" # create a file path for events
 
     with open(save_path_matches, 'w') as f:
             json.dump(matches, f, indent=4)
@@ -110,9 +112,10 @@ def scrape_competition(competition_id: int) -> None:
 
 # Run the scraper for each competition ID
 if __name__ == "__main__":
-     for comp_id in competition_ids: 
+    competition_ids = [int(id.strip()) for id in competition_ids.split(',')] if competition_ids else [] # split and convert to int'
+    for competition_id in competition_ids: 
         try:
-            scrape_competition(comp_id) # scrape each competition
+            scrape_competition(competition_id) # scrape each competition
         except Exception as e:
-            logger.error(f"Error scraping competition {comp_id}: {e}")
+            logger.error(f"Error scraping competition {competition_id}: {e}")
             continue
