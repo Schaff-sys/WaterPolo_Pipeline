@@ -8,109 +8,111 @@ from dotenv import load_dotenv
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# URLs base para scraping
-competition_url_template = 
-match_base_url = 
-event_base_url: os.getenv(event_base_url)
+# Load in URLs for scraping
+competition_ids = os.getenv("competition_ids")
+competition_url_template = os.getenv("competition_url_template")    
+match_base_url = os.getenv("match_base_url")
+event_base_url = os.getenv("event_base_url")
 
 headers = {
     "Authorization": os.getenv("AUTHORIZATION"),
     "User-Agent": os.getenv("USER_AGENT")
 }
 
-if 
+# Gives a warning if any of the environment variables are not set
+if not competition_ids or not competition_url_template or not match_base_url or not event_base_url or not headers:
+    raise ValueError("One or more environment variables are not set correctly.")
 
-print(headers)
-
-def get_match_ids(competition_id):
+# Collect match ids from competition page
+def get_match_ids(competition_id: int) -> list[int]:
     url = competition_url_template.format(competition_id=competition_id)
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=headers) #send request to competition URL
 
     if response.status_code == 200:
         try:
-            data = response.json()
-            if "matches" in data and isinstance(data["matches"], list):
-                return [match["id"] for match in data["matches"]]
-            else:
-                print(f"❌ Key 'matches' not found for competition {competition_id}")
-                return []
+            data = response.json() 
+            return [match["id"] for match in data.get("matches", []) if 'id' in match] #collect ids from matches
         except json.JSONDecodeError:
-            print(f"❌ JSON decode error for competition {competition_id}")
+            logger.error(f"JSON decode error for competition {competition_id}")
             return []
     else:
-        print(f"❌ Failed to fetch match IDs for competition {competition_id}: {response.status_code}")
+        logger.error(f"Failed to fetch match IDs for competition {competition_id}: {response.status_code}")
         return []
 
-def collect_match_data(match_id):
-        response = requests.get(f"{match_base_url}{match_id}", headers=headers)
-        
+# Collect match data 
+def collect_match_data(match_id: int) -> dict | None:
+        response = requests.get(f"{match_base_url}{match_id}", headers=headers) #send request to match URL
         if response.status_code == 200:
-            print(f"✅ Match {match_id} fetched")
+            logger.info(f"Match {match_id} fetched")
             return response.json()
         else:
-            print(f"⚠️ Match {match_id} failed: {response.status_code}")
+            logger.warning(f" Match {match_id} failed: {response.status_code}")
             return None
 
 
-
-def collect_event_data(match_id):
-        response = requests.get(f"{event_base_url}{match_id}", headers=headers)
-        
+# Collect event data
+def collect_event_data(match_id: int) -> dict | None:
+        response = requests.get(f"{event_base_url}{match_id}", headers=headers) #send request to event URL
         if response.status_code == 200:
-            print(f"✅ Event {match_id} fetched")
+            logger.info(f"Event {match_id} fetched")
             return response.json()
         else:
-            print(f"⚠️ Event {match_id} failed: {response.status_code}")
+            logger.warning(f"Event {match_id} failed: {response.status_code}")
             return None
 
-for comp_id in competition_ids:
-    print(f"\n📥 Scraping competition ID: {comp_id}")
-
-    match_ids = list(set(get_match_ids(comp_id)))
-    print(f"🔎 Found {len(match_ids)} match IDs")
-
-all_match_data = []
-
-all_event_data = []
-
-with ThreadPoolExecutor(max_workers=5) as executor:
+# Main script execution
+def fetch_data_parallel(fetch_func, ids: list[int], max_workers=5) -> list[dict]:
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor: # create a thread pool
+        futures = {executor.submit(fetch_func, id) for id in ids} # submit tasks to the executor
+        for future in as_completed(futures): # process completed futures
+            data = future.result() # get the result of the future
+            if data:
+                results.append(data)    
+    time.sleep(random.uniform(1.5, 3.5)) 
+    return results
         
-        futures = {executor.submit(collect_match_data, match_id) for match_id in match_ids}
-        for future in as_completed(futures):
-             data =future.result()
-             if data:
-                all_match_data.append(data)    
-        time.sleep(random.uniform(1.5, 3.5))
+# Save data to JSON files
+def save_data(comp_id: int, matches: list[dict], events: list[dict]) -> None:
+    base_dir = Path(__file__).parent # get the directory of the current script
+    save_dir = base_dir / 'data' # create a subdirectory named 'data'
+    save_dir.mkdir(parents=True, exist_ok=True) # create the directory if it doesn't exist
+    
 
-with ThreadPoolExecutor(max_workers=5) as executor:
-        
-        futures = {executor.submit(collect_event_data, match_id) for match_id in match_ids}
-        for future in as_completed(futures):
-             data =future.result()
-             if data:
-                all_event_data.append(data)    
-        time.sleep(random.uniform(1.5, 3.5))  
-        
+    current_time = time.strftime("%Y%m%d_%H%M%S") # format current time for file naming
+    save_path_matches = save_dir / f"competition_{comp_id}_matches_{current_time}.json" # create a file path for matches
+    save_path_events = save_dir / f"competition_{comp_id}_events_{current_time}.json" # create a file path for events
 
-    # Guardar datos
-base_dir = Path(__file__).parent
+    with open(save_path_matches, 'w') as f:
+            json.dump(matches, f, indent=4)
 
-save_dir = base_dir / 'data' 
+    with open(save_path_events, 'w') as f:
+            json.dump(events, f, indent=4)        
 
-save_dir.mkdir(parents=True, exist_ok=True)
+    logging.info(f"Data for competition {comp_id} saved to: {save_path_matches} and {save_path_events}")
 
-save_path_matches = save_dir/f"competition_{comp_id}_matches.json"
+def scrape_competition(competition_id: int) -> None:
+    logger.info(f"Starting scrape for competition {competition_id}")
+    match_ids = list(set(get_match_ids(competition_id))) # get unique match ids
+    logger.info(f"Found {len(match_ids)} matches for competition {competition_id}")
+    
+    all_match_data = fetch_data_parallel(collect_match_data, match_ids) # collect match data in parallel
+    logger.info(f"Collected data for {len(all_match_data)} matches")
+    all_event_data = fetch_data_parallel(collect_event_data, match_ids) # collect event data in parallel
+    logger.info(f"Collected data for {len(all_event_data)} events")
 
-with open(save_path_matches, 'w') as f:
-        json.dump(all_match_data, f, indent=4)
+    save_data(competition_id, all_match_data, all_event_data) # save the collected data
 
-save_path_events = save_dir/f"competition_{comp_id}_events.json"
-
-with open(save_path_events, 'w') as f:
-        json.dump(all_event_data, f, indent=4)        
-
-print(f"💾 Data for competition {comp_id} saved to: {save_path_matches}") 
+# Run the scraper for each competition ID
+if __name__ == "__main__":
+     for comp_id in competition_ids: 
+        try:
+            scrape_competition(comp_id) # scrape each competition
+        except Exception as e:
+            logger.error(f"Error scraping competition {comp_id}: {e}")
+            continue
